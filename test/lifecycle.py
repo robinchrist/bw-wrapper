@@ -13,13 +13,15 @@ import json, os, shutil, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REAL = os.environ.get("REAL_BW") or sys.exit("source test/fixture/env.sh first")
 BIN = os.path.abspath(os.path.join(HERE, "..", "bw-wrapper"))
-BASE = "/tmp/bww-dev"
+sys.path.insert(0, os.path.join(HERE, "fixture"))
+import safety  # noqa: E402
+
+BASE = safety.DEV_ROOT
+# The developer's own ~/.config/bw-wrapper/config must not change the results.
+os.environ["BWW_CONFIG"] = safety.DEV_ROOT + "/no-config"
 RUN = f"{BASE}/run-lifecycle"
 ROOTS = {"bob": f"{BASE}/lc-bob", "alice": f"{BASE}/lc-alice", "hold": f"{BASE}/lc-hold"}
 CRED = {"bob": ("BOB_EMAIL", "BOB_PW"), "alice": ("ALICE_EMAIL", "ALICE_PW"), "hold": ("ALICE_EMAIL", "ALICE_PW")}
-
-sys.path.insert(0, os.path.join(HERE, "fixture"))
-import safety  # noqa: E402
 
 safety.create_root(BASE)  # a marked fixture directory, or nothing runs
 for _root in ROOTS.values():

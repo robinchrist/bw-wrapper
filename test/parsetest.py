@@ -31,8 +31,10 @@ sys.path.insert(0, os.path.join(HERE, "fixture"))
 import safety  # noqa: E402
 
 try:
-    safety.create_root("/tmp/bww-dev")
-    ROOT = safety.fixture_path("/tmp/bww-dev/parse-root")
+    safety.create_root(safety.DEV_ROOT)
+    ROOT = safety.fixture_path(safety.DEV_ROOT + "/parse-root")
+    # The developer's own ~/.config/bw-wrapper/config must not change the results.
+    os.environ["BWW_CONFIG"] = safety.DEV_ROOT + "/no-config"
     URL = safety.fixture_url(os.environ.get("BWW_FIXTURE_URL", "https://127.0.0.1:18087"))
 except safety.SafetyError as e:
     sys.exit(f"parsetest.py: {e}")

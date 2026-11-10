@@ -19,11 +19,13 @@ sys.path.insert(0, os.path.join(HERE, "fixture"))
 import safety  # noqa: E402
 
 try:
-    safety.create_root("/tmp/bww-dev")
+    safety.create_root(safety.DEV_ROOT)
     ROOT = os.environ["BITWARDENCLI_APPDATA_DIR"] = safety.fixture_path(ROOT)
 except safety.SafetyError as e:
     sys.exit(f"refusing to run against a non-fixture app-data dir: {e}")
-os.environ.setdefault("BWW_RUNTIME_DIR", "/tmp/bww-dev/run-bench")
+os.environ.setdefault("BWW_RUNTIME_DIR", safety.DEV_ROOT + "/run-bench")
+# The developer's own ~/.config/bw-wrapper/config must not change the results.
+os.environ["BWW_CONFIG"] = safety.DEV_ROOT + "/no-config"
 os.makedirs(os.environ["BWW_RUNTIME_DIR"], mode=0o700, exist_ok=True)
 os.environ["BWW_AUTO_LOCK"] = "0"
 
