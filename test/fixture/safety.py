@@ -11,7 +11,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-FIXTURE_ROOTS = ("/tmp/bww-fixture", "/tmp/bww-dev")
+# /tmp itself is a symbolic link on macOS (to /private/tmp). The roots are
+# named by their real location so that "not reached through a link" can be
+# checked literally; on Linux this is plain /tmp.
+TMP = os.path.realpath("/tmp")
+FIXTURE_ROOT = os.path.join(TMP, "bww-fixture")
+DEV_ROOT = os.path.join(TMP, "bww-dev")
+FIXTURE_ROOTS = (FIXTURE_ROOT, DEV_ROOT)
 FIXTURE_HOSTS = ("127.0.0.1", "localhost")
 FIXTURE_PORT = 18087
 

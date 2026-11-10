@@ -47,7 +47,7 @@ class Paths(unittest.TestCase):
 
     def test_reviewed_example(self):
         with self.assertRaises(safety.SafetyError):
-            safety.fixture_path("/tmp/bww-fixture/../../home/someone/.config/Bitwarden CLI")
+            safety.fixture_path(safety.FIXTURE_ROOT + "/../../home/someone/.config/Bitwarden CLI")
 
     def test_symlink_escape(self):
         link = os.path.join(self.fixture, "looks-harmless")
@@ -113,11 +113,11 @@ class Paths(unittest.TestCase):
         """The token-rewriting tool itself: traversal and a planted link are refused, the target is not modified."""
         before = open(self.real_data).read()
         script = os.path.join(HERE, "expire_session.py")
-        safety.create_root("/tmp/bww-dev")
-        planted = tempfile.mkdtemp(dir="/tmp/bww-dev", prefix="safety-test-")
+        safety.create_root(safety.DEV_ROOT)
+        planted = tempfile.mkdtemp(dir=safety.DEV_ROOT, prefix="safety-test-")
         try:
             os.symlink(self.real_data, os.path.join(planted, "data.json"))
-            for target in ("/tmp/bww-dev/.." + self.real, "/tmp/bww-fixture/../.." + self.real, planted):
+            for target in (safety.DEV_ROOT + "/.." + self.real, safety.FIXTURE_ROOT + "/../.." + self.real, planted):
                 p = subprocess.run([sys.executable, script, target, "clock"], capture_output=True, text=True)
                 self.assertNotEqual(p.returncode, 0, target)
                 self.assertIn("refusing", p.stderr, target)
