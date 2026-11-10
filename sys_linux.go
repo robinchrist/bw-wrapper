@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -109,3 +110,13 @@ func lockHolders(path string) []int {
 // sockAddrMax is the size of a unix socket address on this system; a path
 // must be shorter.
 const sockAddrMax = 108
+
+// leaseIdentity is recorded with a lease registration; leaseHeldBy checks
+// later that pid is still that process and not another one with the same
+// number. Here: the process start time from /proc.
+func leaseIdentity(pid int) string { return strconv.FormatUint(procStart(pid), 10) }
+
+func leaseHeldBy(pid int, identity string, registered time.Time) bool {
+	start := procStart(pid)
+	return start != 0 && strconv.FormatUint(start, 10) == identity
+}

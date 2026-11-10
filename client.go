@@ -38,11 +38,30 @@ func (c *client) debugf(format string, a ...any) {
 	}
 }
 
+// leaveRoot takes this process off the root's record of lease holders.
+var leaveRoot = func() {}
+
 // runBW is the drop-in entry point: args are a `bw` command line.
+func runBW(args []string) int {
+	code := runClient(args)
+	leaveRoot()
+	return code
+}
+
+// hold makes this process a holder of the lease it was just given: the file
+// stays open until the process ends, and the process goes on record.
+func (c *client) hold(lease *os.File) {
+	c.lease = lease
+	pid, co := os.Getpid(), c.co
+	co.registerLease(pid)
+	leaveRoot = func() { co.unregisterLease(pid) }
+}
+
+// runClient does the work of runBW.
 //
 // Every decision below is taken from the parsed invocation (args.go) and its
 // class; raw arguments are not looked at again.
-func runBW(args []string) int {
+func runClient(args []string) int {
 	cfg := loadConfig()
 	real, err := findRealBW(cfg)
 	if err != nil {
@@ -224,7 +243,7 @@ func (c *client) admit(quiet bool) verdict {
 		}
 		return v
 	}
-	c.lease = lease
+	c.hold(lease)
 	return admitAllowed
 }
 
@@ -318,7 +337,7 @@ func (c *client) lockOrLogout() int {
 				}
 			}
 		}
-		code := c.runReal(os.Stdout)
+		code := c.runReal(os.Stdout, os.Environ())
 		fmt.Fprintln(os.Stderr)
 		c.fail(fmt.Sprintf("bw-wrapper could not coordinate this %s with other shells (%v). The Bitwarden CLI command above was run, "+
 			"but a bw-wrapper daemon started elsewhere may still hold this vault in memory. Run `bw-wrapper stop` there.", c.inv.cmd, why))
@@ -378,11 +397,12 @@ func (c *client) lockOrLogout() int {
 //	                    started without BW_SESSION, so it cannot unlock itself
 //	                    at startup and cannot store a key. It does not start
 //	                    while a lock or logout is pending.
-//	realRun             An admitted command: the CLI gets the session. If the
-//	                    caller has work to do afterwards, the CLI runs as a
-//	                    child and the data lock is released before that work;
-//	                    the process is only replaced (exec) when nothing
-//	                    follows.
+//	realRun             An admitted command: the CLI gets the session. The
+//	                    data lock is released before the caller's follow-up
+//	                    work.
+//
+// In both, the CLI is a child of the wrapper and both are on record as lease
+// holders (coord.registerLease) until the command is over.
 //	runRealOp           The body of a session operation (lock, logout, login,
 //	                    unlock). The CLI inherits the operation lock; for
 //	                    lock and logout also the pending revocation and the
@@ -412,14 +432,11 @@ func (c *client) realRun(final bool) int {
 	if v, why := c.co.admitted(); v != admitAllowed {
 		return c.refuse(v, why)
 	}
-	if final && !c.cfg.Hold {
-		return c.execReal("not answered from memory") // takes the lease and the data lock with it
-	}
 	after := func() bool { return false }
 	if c.cfg.Hold {
 		after = guardData(c.co)
 	}
-	code := c.runReal(os.Stdout)
+	code := c.runReal(os.Stdout, os.Environ())
 	restored := after()
 	// Released before the caller's follow-up work: a daemon that reloads
 	// needs the lock itself.
@@ -431,31 +448,30 @@ func (c *client) realRun(final bool) int {
 	return code
 }
 
-// execWithoutSession replaces this process with the real CLI for a line
-// that needs no session. BW_SESSION is removed from its environment: the CLI
-// unlocks itself with it on every start and stores the key again, which no
-// process outside an admission may do. The process still joins the root: a
-// lease, taken when no lock or logout is pending, and the data lock, shared.
+// execWithoutSession runs the real CLI for a line that needs no session.
+// BW_SESSION is removed from its environment: the CLI unlocks itself with it
+// on every start and stores the key again, which no process outside an
+// admission may do. The process still joins the root: a lease, taken when
+// no lock or logout is pending, and the data lock, shared.
 func (c *client) execWithoutSession(why string) int {
 	c.debugf("real CLI without a session (%s)", why)
-	if c.co != nil {
-		var err error
-		if c.lease, err = c.co.join(); err == nil {
-			c.data, err = c.co.lockData(false, nil)
+	if c.co == nil {
+		if !errors.Is(c.coErr, errNoCoord) {
+			return c.refuse(admitUnknown, c.coErr.Error())
 		}
-		if err != nil {
-			return c.refuse(admitUnknown, err.Error())
-		}
-	} else if !errors.Is(c.coErr, errNoCoord) {
-		return c.refuse(admitUnknown, c.coErr.Error())
+		err := syscall.Exec(c.real, append([]string{"bw"}, c.inv.args...), withoutSession(os.Environ()))
+		fmt.Fprintf(os.Stderr, "bw-wrapper: cannot run %s: %v\n", c.real, err)
+		return 127
 	}
-	env := withoutSession(os.Environ())
-	for _, f := range c.inherit() {
-		syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), syscall.F_SETFD, 0)
+	lease, err := c.co.join()
+	if err == nil {
+		c.hold(lease)
+		c.data, err = c.co.lockData(false, nil)
 	}
-	err := syscall.Exec(c.real, append([]string{"bw"}, c.inv.args...), env)
-	fmt.Fprintf(os.Stderr, "bw-wrapper: cannot run %s: %v\n", c.real, err)
-	return 127
+	if err != nil {
+		return c.refuse(admitUnknown, err.Error())
+	}
+	return c.runReal(os.Stdout, withoutSession(os.Environ()))
 }
 
 // refuseExpired is the hold-mode check before a command that needs the
@@ -527,18 +543,29 @@ func exitCode(real string, err error) int {
 	return 127
 }
 
-// runReal runs the real CLI as a child and returns its exit code.
-func (c *client) runReal(stdout io.Writer, extraEnv ...string) int {
+// runReal runs the real CLI as a child and returns its exit code. The child
+// inherits this command's lease and data lock and goes on record as a lease
+// holder, so that a lock or logout can find it even if this process is
+// gone. The wrapper stays as its parent instead of replacing itself: it has
+// to take both off the record when the command is over.
+func (c *client) runReal(stdout io.Writer, env []string) int {
 	c.debugf("real CLI as a child process")
 	cmd := exec.Command(c.real, c.inv.args...)
 	cmd.Args[0] = "bw"
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, stdout, os.Stderr
-	cmd.Env = append(os.Environ(), extraEnv...)
+	cmd.Env = env
 	cmd.ExtraFiles = c.inherit()
 	// The child shares our terminal and gets the signals itself.
 	signal.Ignore(syscall.SIGINT, syscall.SIGQUIT)
 	defer signal.Reset(syscall.SIGINT, syscall.SIGQUIT)
-	return exitCode(c.real, cmd.Run())
+	if err := cmd.Start(); err != nil {
+		return exitCode(c.real, err)
+	}
+	if c.co != nil && c.lease != nil {
+		c.co.registerLease(cmd.Process.Pid)
+		defer c.co.unregisterLease(cmd.Process.Pid)
+	}
+	return exitCode(c.real, cmd.Wait())
 }
 
 // runRealOp runs the real CLI as the body of a session operation. The child

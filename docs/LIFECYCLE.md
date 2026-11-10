@@ -51,6 +51,14 @@ means the real CLI gets the open descriptor, which is what makes I2 hold.
 | `data.lock` | exclusive | hold-mode runs (snapshot … restore decision); lock, logout, auto-lock | before the real CLI starts … its exit |
 | `data.lock` | shared | all other real-CLI processes; inherited | before start … exit |
 
+**Who holds a lease** is also on record, because a lock does not tell who
+holds it: `leases/<pid>` for the wrapper client, the real CLI it starts, and
+the real CLIs a daemon starts. A record is removed when its process ends
+normally. One left behind by a killed process is dropped when it is next
+looked at and never leads to a signal: before a process is stopped it must
+still be the one that registered (start time from `/proc` on Linux; elsewhere
+it must have started no later than its registration).
+
 **Lock order** (a process only ever waits for a lock further right while
 holding locks further left):
 
@@ -73,9 +81,9 @@ whether the process gets `BW_SESSION`.
 
 | # | Path (code) | Used for | Session | Lease | `data.lock` | Other locks | Returns to wrapper |
 |---|---|---|---|---|---|---|---|
-| P1 | `client.execWithoutSession` | help, version, local commands; `status`, `login --check`, `unlock --check` that were not admitted | **no** (removed) | `coord.join`: taken when no lock is pending | shared | — | no (exec) |
-| P2 | `client.realRun(final=true)` | admitted commands with nothing to do afterwards: reads the daemon cannot answer, `sync --last`, admitted `status`/`--check` | yes | `coord.admit` | shared; hold mode: exclusive | — | exec; hold mode: child, restore decision |
-| P3 | `client.realRun(final=false)` | `sync`, writes | yes | `coord.admit` | as P2 | — | always a child; lock released, then daemons reload |
+| P1 | `client.execWithoutSession` | help, version, local commands; `status`, `login --check`, `unlock --check` that were not admitted | **no** (removed) | `coord.join`: taken when no lock is pending | shared | — | child; taken off the record |
+| P2 | `client.realRun(final=true)` | admitted commands with nothing to do afterwards: reads the daemon cannot answer, `sync --last`, admitted `status`/`--check` | yes | `coord.admit` | shared; hold mode: exclusive | — | child; taken off the record; hold mode: restore decision |
+| P3 | `client.realRun(final=false)` | `sync`, writes | yes | `coord.admit` | as P2 | — | child; lock released, then daemons reload |
 | P4 | `client.runRealOp` in `lockOrLogout` | `lock`, `logout` | yes | — (it drains them) | exclusive | `revoke.lock`, `op.lock` | child; outcome recorded |
 | P5 | `realLock` (client `expire`, daemon `autoLockNow`) | auto-lock | no | — | exclusive | `revoke.lock`, `op.lock` | child; outcome recorded |
 | P6 | `client.runRealOp` in `unlock` | `login`, `unlock` | yes | — (cancelled by a lock instead) | — (see I4 below) | `op.lock` | child; verification, reopen, daemon start |
@@ -94,8 +102,8 @@ Mapping to the invariants:
 
 | | I1 takes part | I2 until exit | I3 lock completion | I4 snapshot | I5 post-work | I6 session |
 |---|---|---|---|---|---|---|
-| P1 | lease + data lock | exec keeps both | waited for, then stopped; does not start while a lock is pending; has no key (F1 cannot happen) | shared lock: excluded from guarded runs | none | none given |
-| P2 | lease + data lock | exec, or child inherits | waited for, then stopped | holds the lock itself | hold mode: child, restore | admitted |
+| P1 | lease + data lock | child inherits both; wrapper and child are on record | waited for, then stopped; does not start while a lock is pending; has no key (F1 cannot happen) | shared lock: excluded from guarded runs | none | none given |
+| P2 | lease + data lock | child inherits both; wrapper and child are on record | waited for, then stopped | holds the lock itself | hold mode: child, restore | admitted |
 | P3 | lease + data lock | child inherits | waited for, then stopped | holds the lock itself | child; reload before return | admitted |
 | P4 | is the lock | inherits `op`, `revoke`, `data` | — | exclusive; restores are void by epoch | outcome from the data file (F3) | session command |
 | P5 | is the lock | as P4 | — | as P4 | as P4 | none needed |
@@ -147,7 +155,7 @@ then P2 or P3. A line that needs no session: P1.
 | Who | Cancels | How |
 |---|---|---|
 | lock/logout | running login/unlock (wrapper and its real CLI; also a real CLI whose wrapper died) | SIGTERM; after 5 s SIGKILL to every process holding `op.lock` |
-| lock/logout | lease holders | waits 10 s; SIGTERM; 2 s later SIGKILL (found through `/proc`; elsewhere it cannot, and reports failure) |
+| lock/logout | lease holders | waits 10 s; SIGTERM; 2 s later SIGKILL. Found through the record in `leases/` (every system), and on Linux also through `/proc` |
 | lock/logout | daemons | stop request; daemon kills and awaits its children |
 | lock/logout | queued and later-finishing login/unlock | epoch: they stop or do not count |
 | nobody | a running lock/logout | it is waited for |
@@ -229,9 +237,10 @@ End to end against the real CLI and a local server: `test/difftest.py`
 
 ## 6. Limits
 
-- Stopping a process that holds a lease needs `/proc` (Linux). Elsewhere
-  lock/logout waits, cannot stop it, and exits with an error although the
-  vault is locked.
+- A lease holder that is on no record cannot be found without `/proc`: a
+  real CLI whose wrapper was killed in the instant between starting it and
+  recording it. On Linux it is found anyway; elsewhere lock/logout waits,
+  cannot stop it, and exits with an error although the vault is locked.
 - A daemon is hardened against inspection, so it is stopped by request, not
   by signal; one that does not confirm leaves lock/logout reporting failure
   if it still holds a lease.

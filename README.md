@@ -33,8 +33,8 @@ login, sync, decryption and write. bw-wrapper only remembers its answers.
 
 ## Install
 
-Needs Go ≥ 1.24, Linux or macOS (macOS is untested), and the real Bitwarden
-CLI on `PATH`.
+Needs Go ≥ 1.24, Linux or macOS (macOS is tested in CI only), and the real
+Bitwarden CLI on `PATH`.
 
 ```
 make install    # ~/.local/bin/bw-wrapper and ~/.local/bin/bw -> bw-wrapper

@@ -18,6 +18,9 @@ package main
 //	use.lock    shared by every command that was admitted to use an existing
 //	            session (its lease), for as long as it runs and writes
 //	            output; a lock or logout waits until those are gone
+//	leases/     one file per process that holds a lease (named after its
+//	            pid): how a lock or logout finds the processes it has to
+//	            wait for or stop, on every system
 //	activity/   one file per session (named after its tag): its modification
 //	            time is when that session was last used through the wrapper
 //	data.lock   held by every real-CLI process the wrapper starts on this
@@ -95,6 +98,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -125,10 +129,12 @@ func openCoord(root string) (*coord, error) {
 		}
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "activity"), 0o700); err != nil {
-		return nil, err
+	for _, sub := range []string{"activity", "leases"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
+			return nil, err
+		}
 	}
-	for _, p := range []string{dir, filepath.Join(dir, "daemons"), filepath.Join(dir, "activity")} {
+	for _, p := range []string{dir, filepath.Join(dir, "daemons"), filepath.Join(dir, "activity"), filepath.Join(dir, "leases")} {
 		fi, err := os.Lstat(p)
 		if err != nil {
 			return nil, err
@@ -867,6 +873,63 @@ func (c *coord) enterUse() (*os.File, error) {
 	return f, nil
 }
 
+// ---------- who holds a lease ----------
+//
+// A lock is released by the kernel when its holders are gone, but the kernel
+// does not say who they are (only Linux lets one look, through /proc). So
+// every process that holds a lease is also on record: the wrapper client
+// itself, the real CLI it starts, and the real CLIs a daemon starts. A lock
+// or logout that has waited long enough stops the processes on record.
+// Records are removed when the process ends normally; one left behind by a
+// killed process is dropped when it is next looked at, and never leads to a
+// signal: the process must still be the one that registered (leaseHeldBy).
+
+func (c *coord) leaseFile(pid int) string {
+	return filepath.Join(c.dir, "leases", strconv.Itoa(pid))
+}
+
+// registerLease records pid as a holder of a lease.
+func (c *coord) registerLease(pid int) {
+	writeAtomic(c.leaseFile(pid), []byte(leaseIdentity(pid)))
+}
+
+func (c *coord) unregisterLease(pid int) { os.Remove(c.leaseFile(pid)) }
+
+// leaseHolders returns the processes on record that still exist. Linux adds
+// what /proc shows (a process that died before it could register its child
+// leaves a holder that is on no record).
+func (c *coord) leaseHolders() []int {
+	seen := map[int]bool{os.Getpid(): true}
+	var pids []int
+	add := func(pid int) {
+		if !seen[pid] {
+			seen[pid] = true
+			pids = append(pids, pid)
+		}
+	}
+	entries, _ := os.ReadDir(filepath.Join(c.dir, "leases"))
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		identity, _ := os.ReadFile(c.leaseFile(pid))
+		if leaseHeldBy(pid, string(identity), fi.ModTime()) {
+			add(pid)
+		} else {
+			os.Remove(c.leaseFile(pid))
+		}
+	}
+	for _, pid := range lockHolders(c.path("use.lock")) {
+		add(pid)
+	}
+	return pids
+}
+
 // useDrainWait is how long a lock or logout waits for commands that were
 // admitted before it (a real CLI still running, a client still writing a
 // cached answer into a slow pipe). After that they are stopped.
@@ -874,9 +937,9 @@ var useDrainWait = 10 * time.Second
 
 // drainUse returns once no command admitted before the revocation is left.
 // Those that do not end within wait are terminated, then killed. It runs
-// while the revocation is pending, so nobody new is admitted meanwhile, and
-// only admitted commands ever open use.lock (see admit): whoever is found
-// holding it was admitted before the revocation.
+// while the revocation is pending, so nobody new is admitted meanwhile:
+// whoever is found holding a lease (leaseHolders) got it before the
+// revocation.
 // false: some are still there and could not be stopped.
 func (c *coord) drainUse(wait time.Duration) bool {
 	f, err := os.OpenFile(c.path("use.lock"), os.O_CREATE|os.O_RDWR, 0o600)
@@ -895,12 +958,12 @@ func (c *coord) drainUse(wait time.Duration) bool {
 		case waited > wait+4*time.Second:
 			return false
 		case waited > wait+2*time.Second && !killed:
-			for _, pid := range lockHolders(c.path("use.lock")) {
+			for _, pid := range c.leaseHolders() {
 				syscall.Kill(pid, syscall.SIGKILL)
 			}
 			killed = true
 		case waited > wait && !termed:
-			for _, pid := range lockHolders(c.path("use.lock")) {
+			for _, pid := range c.leaseHolders() {
 				syscall.Kill(pid, syscall.SIGTERM)
 			}
 			termed = true

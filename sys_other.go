@@ -5,7 +5,11 @@ package main
 import (
 	"net"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -41,3 +45,26 @@ func lockHolders(path string) []int { return nil }
 // sockAddrMax is the size of a unix socket address on this system; a path
 // must be shorter.
 const sockAddrMax = 104
+
+// leaseIdentity / leaseHeldBy (see sys_linux.go). Without /proc the check
+// is made when it is needed, with ps: the process must exist and must have
+// started no later than its registration. A process that got the same pid
+// afterwards started later, and is left alone.
+func leaseIdentity(pid int) string { return "" }
+
+func leaseHeldBy(pid int, identity string, registered time.Time) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	ps := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
+	ps.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := ps.Output()
+	if err != nil {
+		return false // no such process
+	}
+	started, err := time.ParseInLocation("Mon Jan _2 15:04:05 2006", strings.Join(strings.Fields(string(out)), " "), time.Local)
+	if err != nil {
+		return true // registered and alive; the start time could not be read
+	}
+	return !started.After(registered.Add(time.Second)) // ps gives whole seconds
+}

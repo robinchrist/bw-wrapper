@@ -45,10 +45,10 @@ its process has ended, that is, until its output is written.
 4. *Wait for the leases.* Commands admitted before step 1 may still be
    running: a `bw export` in the real CLI, or a `bw list items` that got its
    answer from the daemon and is still writing it into a slow pipe.
-   Lock/logout waits for them, 10 seconds at most, then stops them (Linux;
-   elsewhere it cannot find the processes, and if one is still there at the
-   end, lock/logout says so and exits with an error although the vault is
-   locked). Nothing is printed by them after lock/logout has returned.
+   Lock/logout waits for them, 10 seconds at most, then stops them. (If one
+   cannot be stopped, lock/logout says so and exits with an error although
+   the vault is locked.) Nothing is printed by them after lock/logout has
+   returned.
 5. *Run the real command*, holding the operation lock and the pending
    revocation (the real CLI inherits both, so they last as long as it does,
    even if the wrapper is killed).

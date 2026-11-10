@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1115,9 +1114,6 @@ func testLockWaitsForRunningRead(t *testing.T, hold string) {
 // A real-CLI run that does not end is stopped; the lock is not held up for
 // good and nothing is printed after it.
 func TestLockStopsHangingRead(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("holders of a lock file can only be found through /proc")
-	}
 	e := newFakeEnv(t)
 	read := e.cmd(e.dirA, e.session, nil, "export")
 	var out bytes.Buffer
@@ -1456,9 +1452,6 @@ func TestUnknownStateDenies(t *testing.T) {
 // written its output, also when the answer came from a daemon: a lock waits
 // for it or stops it, and nothing is written after the lock returns.
 func TestLockStopsCachedOutput(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("holders of a lock file can only be found through /proc")
-	}
 	e := newFakeEnv(t)
 	os.WriteFile(filepath.Join(e.fake, "notes"), bytes.Repeat([]byte("n"), 400<<10), 0o600) // far more than a pipe holds
 	e.cached(e.dirA)
@@ -1490,7 +1483,7 @@ func TestLockStopsCachedOutput(t *testing.T) {
 	// The lock has returned. Whatever is still in the pipe was written before
 	// that; the writer is gone and nothing follows.
 	if err := list.Process.Signal(syscall.Signal(0)); err == nil {
-		if state, _ := os.ReadFile("/proc/" + strconv.Itoa(list.Process.Pid) + "/stat"); !bytes.Contains(state, []byte(") Z ")) {
+		if !zombie(list.Process.Pid) {
 			t.Fatal("the client that was writing cached output is still running after the lock returned")
 		}
 	}
@@ -1809,9 +1802,6 @@ func TestNoSessionWithoutAdmission(t *testing.T) {
 	})
 	for _, args := range [][]string{{"status"}, {"unlock", "--check"}, {"login", "--check"}} {
 		t.Run("a lock does not return while an admitted `"+strings.Join(args, " ")+"` is in its startup", func(t *testing.T) {
-			if runtime.GOOS != "linux" {
-				t.Skip("holders of a lock file can only be found through /proc")
-			}
 			e := newFakeEnv(t)
 			e.flag("startup-hold")
 			e.release("unlock")
@@ -1922,9 +1912,15 @@ func TestDaemonChildKeepsDataLock(t *testing.T) {
 	}
 }
 
+// zombie reports whether a process has exited and is only waiting to be
+// reaped (or is gone altogether).
 func zombie(pid int) bool {
-	b, _ := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	return bytes.Contains(b, []byte(") Z "))
+	if b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat"); err == nil {
+		return bytes.Contains(b, []byte(") Z "))
+	}
+	out, _ := exec.Command("ps", "-o", "state=", "-p", strconv.Itoa(pid)).Output()
+	state := strings.TrimSpace(string(out))
+	return state == "" || strings.HasPrefix(state, "Z")
 }
 
 // The interaction matrix of docs/LIFECYCLE.md: every kind of real-CLI
@@ -1955,9 +1951,6 @@ func TestEveryProcessIsCoordinated(t *testing.T) {
 
 	for _, args := range sessionless {
 		t.Run("lock completion: a running `bw "+strings.Join(args, " ")+"` is waited for, then stopped", func(t *testing.T) {
-			if runtime.GOOS != "linux" {
-				t.Skip("holders of a lock file can only be found through /proc")
-			}
 			e := newFakeEnv(t)
 			e.flag("any-hold")
 			proc := bg(t, e.cmd(e.dirA, e.session, nil, args...))
@@ -2008,9 +2001,6 @@ func TestEveryProcessIsCoordinated(t *testing.T) {
 		})
 	}
 	t.Run("lock completion: the child of a killed daemon is found and stopped", func(t *testing.T) {
-		if runtime.GOOS != "linux" {
-			t.Skip("holders of a lock file can only be found through /proc")
-		}
 		e := newFakeEnv(t)
 		e.env = append(e.env, "BWW_TEST_NO_PDEATHSIG=1")
 		e.flag("load-hold")

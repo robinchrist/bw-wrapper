@@ -463,8 +463,10 @@ func (d *daemon) realWith(session string, inherit []*os.File) realFunc {
 		}
 		testHook("child-started")
 		d.kids.started(cmd.Process)
+		d.co.registerLease(cmd.Process.Pid) // it holds our lease: on record, so a lock finds it without us
 		buf := readAllWiping(out)
 		err = cmd.Wait()
+		d.co.unregisterLease(cmd.Process.Pid)
 		testHook("child-reaped")
 		d.kids.done(cmd.Process)
 		return buf, err

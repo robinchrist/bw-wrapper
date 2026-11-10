@@ -59,7 +59,14 @@ func (d *daemon) startServe(session string, inherit []*os.File) (*serveSource, e
 	}
 	testHook("child-started")
 	d.kids.started(s.cmd.Process)
-	go func() { s.cmd.Wait(); testHook("child-reaped"); d.kids.done(s.cmd.Process); close(s.done) }()
+	d.co.registerLease(s.cmd.Process.Pid)
+	go func() {
+		s.cmd.Wait()
+		d.co.unregisterLease(s.cmd.Process.Pid)
+		testHook("child-reaped")
+		d.kids.done(s.cmd.Process)
+		close(s.done)
+	}()
 
 	deadline := time.Now().Add(time.Minute)
 	for {
