@@ -23,3 +23,23 @@ onto a real vault is refused. Nothing between it and a file may be a
 symbolic link, and files are read and replaced through that one module. The
 server URL is parsed and must be the local fixture origin; redirects
 elsewhere are refused.
+
+## CI and releases
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull
+request: format check, `go vet`, the Go suite under the race detector and
+the fixture safety tests on Linux and macOS, and a cross-build for Linux and
+macOS on amd64 and arm64. The macOS test job is allowed to fail until it has
+been seen passing there. The end-to-end tests against a real Bitwarden CLI
+(`test/difftest.py`, `test/lifecycle.py`, `test/parsetest.py`) need the
+fixture and are not part of CI.
+
+`.github/workflows/release.yml` runs when a tag `v*` is pushed: the same
+checks, then static binaries for the four targets, packed with `LICENSE` and
+`README.md`, a `SHA256SUMS` file, and a GitHub release with generated notes.
+A tag with a suffix (`v1.2.3-rc1`) becomes a pre-release.
+
+```
+git tag -a v0.1.0 -m v0.1.0
+git push origin v0.1.0
+```
