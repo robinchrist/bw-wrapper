@@ -281,7 +281,8 @@ def main():
     for args in (["create", "folder", "eyJuYW1lIjoieCJ9"], ["delete", "item", iid], ["edit", "item", iid, "e30="],
                  ["import", "bitwardenjson", "/dev/null"], ["send", "hello"], ["serve"], ["frobnicate"]):
         rc, out, err, dt = bw("bob", *args, session=s1)
-        check(rc == 1 and out == "" and "read-only" in err and dt < 0.5, f"`{args[0]}` is refused", out + err)
+        why = "cannot tell which command" if args[0] == "frobnicate" else "read-only"
+        check(rc == 1 and out == "" and why in err and dt < 0.5, f"`{args[0]}` is refused", out + err)
     # `delete item <id> --help` is help, for the real CLI and so for the wrapper
     rc, out, err, _ = bw("bob", "delete", "item", iid, "--help", session=s1)
     check(rc == 0 and out.startswith("Usage: bw delete"), "`delete item <id> --help` prints help, like the real CLI", out + err)

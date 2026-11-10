@@ -537,6 +537,19 @@ func TestFindRealBW(t *testing.T) {
 	if got, err := findRealBW(&config{}); err == nil {
 		t.Errorf("only the wrapper on PATH, got %q", got)
 	}
+	// Another copy of the wrapper (an installed one, found while a freshly
+	// built one runs) is not the real CLI either.
+	other := filepath.Join(dir, "installed")
+	os.Mkdir(other, 0o700)
+	os.WriteFile(filepath.Join(other, "bw-wrapper"), []byte("#!/bin/sh\n"), 0o755)
+	os.Symlink("bw-wrapper", filepath.Join(other, "bw"))
+	t.Setenv("PATH", other+string(os.PathListSeparator)+"tools")
+	if got, err := findRealBW(&config{}); err != nil || got != cli {
+		t.Errorf("an installed wrapper before the real CLI on PATH -> %q, %v; want %s", got, err, cli)
+	}
+	if got, err := findRealBW(&config{RealBW: filepath.Join(other, "bw")}); err == nil {
+		t.Errorf("real_bw pointing at another copy of the wrapper accepted: %s", got)
+	}
 }
 
 func TestSealedWith(t *testing.T) {

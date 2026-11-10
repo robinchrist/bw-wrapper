@@ -168,9 +168,15 @@ func loadConfig() *config {
 func findRealBW(c *config) (string, error) {
 	self, _ := os.Executable()
 	selfInfo, _ := os.Stat(self)
+	// This binary, or another copy of the wrapper (an installed one found
+	// while a freshly built one runs): never the real CLI.
 	isSelf := func(p string) bool {
 		fi, err := os.Stat(p)
-		return err == nil && selfInfo != nil && os.SameFile(fi, selfInfo)
+		if err == nil && selfInfo != nil && os.SameFile(fi, selfInfo) {
+			return true
+		}
+		target, err := filepath.EvalSymlinks(p)
+		return err == nil && filepath.Base(target) == "bw-wrapper"
 	}
 	usable := func(p string) bool {
 		fi, err := os.Stat(p)

@@ -46,6 +46,10 @@ closed), the command fails with exit code 1.
 
 ## Differences from the real CLI
 
+- `bw --is-wrapper`, as the whole command line, prints the wrapper's version
+  and the real CLI it uses, and exits with 0. The real CLI rejects the option
+  and exits with 1, so `bw --is-wrapper >/dev/null 2>&1` tells the two apart.
+  With `BWW_DISABLE=1` the line goes to the real CLI.
 - Organization event logs: the real CLI reports "item viewed" events to the
   server; answers from memory do not.
 - A login in an organization collection with hidden passwords is answered by

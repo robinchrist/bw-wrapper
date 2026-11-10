@@ -2271,3 +2271,27 @@ func TestInstallPreservesForeignBw(t *testing.T) {
 		}
 	})
 }
+
+// `bw --is-wrapper` tells the wrapper from the real CLI, and only as the
+// whole command line.
+func TestIsWrapper(t *testing.T) {
+	e := newFakeEnv(t)
+	r := e.run(e.cmd(e.dirA, e.session, nil, "--is-wrapper"))
+	if r.code != 0 || !strings.HasPrefix(r.stdout, "bw-wrapper ") || !strings.Contains(r.stdout, "real bw: "+filepath.Join(e.fake, "bw")) {
+		t.Errorf("bw --is-wrapper: (%d, %q, %q)", r.code, r.stdout, r.stderr)
+	}
+	if files, _ := filepath.Glob(filepath.Join(e.fake, "*-runs")); len(files) != 0 {
+		t.Errorf("the real CLI was run: %v", files)
+	}
+	// with the wrapper bypassed, the real CLI gets the line (and rejects it)
+	e.run(e.cmd(e.dirA, e.session, []string{"BWW_DISABLE=1"}, "--is-wrapper"))
+	if e.runs("--is-wrapper") != 1 {
+		t.Error("BWW_DISABLE=1 did not hand the line to the real CLI")
+	}
+	// anywhere else it is an ordinary (unknown) option, not a question to the wrapper
+	for _, args := range [][]string{{"status", "--is-wrapper"}, {"--is-wrapper", "status"}, {"get", "password", "x", "--output", "--is-wrapper"}} {
+		if r := e.run(e.cmd(e.dirA, e.session, nil, args...)); strings.HasPrefix(r.stdout, "bw-wrapper ") {
+			t.Errorf("bw %v was answered as --is-wrapper", args)
+		}
+	}
+}

@@ -56,6 +56,7 @@ bw lock                       # wipes the daemon, then locks
 ```
 
 ```
+bw --is-wrapper               # succeeds only if this bw is the wrapper
 bw-wrapper status             # running daemons
 bw-wrapper stop               # wipe and stop them (does not lock)
 BWW_DISABLE=1 bw …            # bypass the wrapper for one command

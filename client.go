@@ -53,19 +53,29 @@ func runBW(args []string) int {
 	if on, _ := parseBool(os.Getenv("BWW_DISABLE")); on {
 		return c.execReal("wrapper disabled")
 	}
+	// `bw --is-wrapper`, as the whole command line, is answered here: it is
+	// how a person or a script finds out which `bw` they are talking to. The
+	// real CLI rejects the option (exit code 1), so `bw --is-wrapper` is true
+	// only for the wrapper. It is the one line that does not behave like the
+	// real CLI, and only as the sole argument, so it can never change what
+	// another command line means.
+	if len(args) == 1 && args[0] == "--is-wrapper" {
+		fmt.Printf("bw-wrapper %s\nreal bw: %s\n", version, real)
+		return 0
+	}
 	inv := c.inv
 	class := inv.class()
-	// The gate comes first: nothing below may hand a write to the real CLI.
+	// A line whose command cannot be told for certain (a mistyped option, a
+	// command the wrapper's table does not have) is not run, whether writes
+	// are allowed or not: it could be a write, or a lock, logout, login or
+	// unlock of a newer CLI, and those must not bypass the session protocol.
+	if class == classWrite && inv.cmd == "" {
+		return c.fail("bw-wrapper cannot tell which command this line runs: it starts with an option or command that the wrapper does not know " +
+			"(a typo?), so it is not passed to the Bitwarden CLI. To run it with the real CLI anyway: BWW_DISABLE=1 bw …")
+	}
+	// The gate: nothing below may hand a write to the real CLI.
 	if class == classWrite && !cfg.AllowWrites {
 		return c.deny()
-	}
-	// A line whose command cannot be told for certain is not run even when
-	// writes are allowed: it could be a lock, logout, login or unlock of a
-	// CLI newer than the wrapper's table, and those must not bypass the
-	// session protocol.
-	if class == classWrite && inv.cmd == "" {
-		return c.fail("bw-wrapper cannot tell which command this line runs (an option or command it does not know comes first), " +
-			"so it is not passed to the Bitwarden CLI. Put global options after the command, or set BWW_DISABLE=1 for this one call.")
 	}
 	c.root = appDataDir(real)
 	var dirErr error
